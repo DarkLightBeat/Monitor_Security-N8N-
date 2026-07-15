@@ -1,0 +1,989 @@
+{
+  "name": "Monitor Security",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "8d2ac127-aac4-45ec-8ddb-0b0202da8670",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [
+        -4224,
+        192
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "url": "https://security.paloaltonetworks.com/rss.xml",
+        "options": {}
+      },
+      "id": "9b64ad42-929d-4757-bb6e-d8a5789c6dff",
+      "name": "Get Palo Alto security advisories",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        -3952,
+        96
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+        "options": {}
+      },
+      "id": "e03940c6-6f05-4a34-8b39-2ecf25cd0326",
+      "name": "CISA KEV HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -3952,
+        288
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/advisories?per_page=20&type=reviewed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "=n8n-security-triage-workflow"
+            },
+            {
+              "name": "Accept",
+              "value": "=application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5036ca40-bade-46e8-90e7-150a2aac3a05",
+      "name": "GitHub Advisory HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -3952,
+        496
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize Palo Alto RSS items to a common schema\nreturn $input.all().map(item => ({\n  json: {\n    title: item.json.title || '',\n    link: item.json.link || '',\n    pubDate: item.json.pubDate || new Date().toISOString(),\n    severity: item.json.title && item.json.title.includes('Severity:')\n      ? item.json.title.split('Severity:')[1].replace(')', '').trim()\n      : 'Unknown',\n    type: item.json.title ? item.json.title.split(':')[0].trim() : 'Palo Alto',\n    source: 'Palo Alto'\n  }\n}));"
+      },
+      "id": "b01f66ff-f3d9-483e-8db8-5e3ab4dff440",
+      "name": "Normalize Palo Alto",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -3664,
+        96
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split and normalize CISA KEV JSON feed into individual advisory items\nconst data = $input.first().json;\nconst vulns = (data.vulnerabilities || []).slice(0, 50);\nif (vulns.length === 0) return [];\nreturn vulns.map(v => ({\n  json: {\n    title: `${v.cveID}: ${v.vulnerabilityName} (Severity: High)`,\n    link: `https://www.cisa.gov/known-exploited-vulnerabilities-catalog`,\n    pubDate: v.dateAdded ? new Date(v.dateAdded + 'T00:00:00Z').toISOString() : new Date().toISOString(),\n    severity: 'High',\n    type: 'CISA KEV',\n    source: 'CISA KEV',\n    description: v.shortDescription || ''\n  }\n}));"
+      },
+      "id": "84549355-dca6-4efb-9f88-dcc00bba8df2",
+      "name": "Normalize CISA",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -3664,
+        288
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all items that were automatically split by the HTTP Request node\nconst items = $input.all();\n\n// Map over each item to normalize it to your common schema\nreturn items.map(item => {\n  const a = item.json;\n  \n  // Guard clause: skip if it's an unexpected response (like an API error)\n  if (!a.ghsa_id) return null;\n\n  // Format the severity text\n  const sev = a.severity\n    ? a.severity.charAt(0).toUpperCase() + a.severity.slice(1)\n    : 'Unknown';\n    \n  return {\n    json: {\n      title: `${a.ghsa_id}: ${a.summary} (Severity: ${sev})`,\n      link: a.html_url || `https://github.com/advisories/${a.ghsa_id}`,\n      pubDate: a.published_at || new Date().toISOString(),\n      severity: sev,\n      type: 'GitHub Advisory',\n      source: 'GitHub',\n      description: a.description || ''\n    }\n  };\n}).filter(item => item !== null); // This removes any empty/null items"
+      },
+      "id": "360e0774-fb0e-4773-91f4-006486151eb8",
+      "name": "Normalize GitHub",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -3664,
+        496
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Passthrough — all fields already normalized upstream.\n// Keeping this node named 'Extract info' so all downstream\n// expressions like $('Extract info').item.json.title continue to work\n// regardless of which source (Palo Alto / CISA / GitHub) the item came from.\nreturn $input.all().map(item => ({ json: item.json }));"
+      },
+      "id": "919b1bcb-5626-4f3d-84e7-572f4ce457b1",
+      "name": "Extract info",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -2992,
+        288
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "date-condition",
+              "leftValue": "={{ $json.pubDate }}",
+              "rightValue": "={{ $today.minus({days: 1}).toISO() }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "after"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8122a746-c43c-45cd-b08c-7866c21f1951",
+      "name": "Check if posted in last 24 hours",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -2752,
+        288
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "158SZyLG7ii9h9tGxpvEwOKLW3g_wE7rZHaG4AV6G7YM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Monitor",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/158SZyLG7ii9h9tGxpvEwOKLW3g_wE7rZHaG4AV6G7YM/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "5c9616e3-06af-4f47-9e2b-a065479dad4b",
+      "name": "Check Database (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -2512,
+        288
+      ],
+      "typeVersion": 4.3,
+      "alwaysOutputData": false,
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "NHnMA0KE7XyywmaG",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "33ff18a6-62a2-4619-892c-ed1b7af439fa",
+      "name": "Ignore stale advisory",
+      "type": "n8n-nodes-base.noOp",
+      "position": [
+        -2512,
+        496
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "mock-stack",
+              "name": "companyTechStack",
+              "value": "GlobalProtect v5.2, PAN-OS 10.1, Traps Endpoint Security, React 18, Ubuntu 22.04, AWS EC2, Node.js 18, OpenSSL 3.x, Apache HTTP Server 2.4, Cisco IOS XE",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "454ad6ae-13e9-40c9-82b0-26c865c96245",
+      "name": "Get Tech Stack (Mock)",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -1904,
+        288
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a senior security triage AI. Your task is to FIRST filter irrelevant advisories, then analyze only relevant ones against our company's tech stack.\n\n-------------------------\nSTEP 1: FILTERING (STRICT)\n-------------------------\nBefore doing any analysis, determine if the advisory is relevant.\n\nMark the advisory as NOT relevant (in_stack = false, minimal analysis) if ANY of the following are true:\n- The advisory does NOT mention any software, library, framework, or service related to our tech stack\n- The advisory is too vague (e.g., missing affected product, version, or clear vulnerability details)\n- The advisory relates to hardware, OS, or tools NOT used in our stack\n- The advisory is purely informational (no vulnerability or exploit risk)\n- The advisory severity is missing or unclear\n\nIf NOT relevant, return:\n{\n  \"in_stack\": false,\n  \"severity_normalized\": \"Low\",\n  \"analysis_summary\": \"This advisory does not impact our current tech stack and requires no action.\"\n}\n\nDO NOT proceed to further analysis if filtered out.\n\n-------------------------\nSTEP 2: ANALYSIS (ONLY IF RELEVANT)\n-------------------------\nIf the advisory IS relevant to our tech stack:\n\n- Compare affected technologies with our stack\n- Normalize severity into one of: Critical, High, Medium, Low\n- Provide a concise 2–3 sentence summary including:\n  1. Why it affects (or could affect) our stack\n  2. The potential risk\n  3. Recommended action (e.g., patch, monitor, ignore)\n\n-------------------------\nINPUT DATA\n-------------------------\nSource Feed: {{ $('Code in JavaScript1').item.json.source }}\nAdvisory Title: {{ $('Code in JavaScript1').item.json.title }}\nAdvisory Severity: {{ $('Code in JavaScript1').item.json.severity }}\nAdvisory Link: {{ $('Code in JavaScript1').item.json.link }}\n\nOur Tech Stack: {{ $json.companyTechStack }}\n\n-------------------------\nOUTPUT FORMAT (STRICT JSON ONLY)\n-------------------------\nRespond ONLY with a valid JSON object matching this exact schema:\n{\n  \"in_stack\": boolean,\n  \"severity_normalized\": \"Critical\" | \"High\" | \"Medium\" | \"Low\",\n  \"analysis_summary\": string\n}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        -1600,
+        288
+      ],
+      "id": "0357fc6c-5365-4753-b080-7939669cf0d1",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.parse($json.output.replace(/```json/gi, '').replace(/```/gi, '').trim()) }}",
+        "options": {}
+      },
+      "id": "eb7d2c47-fd4e-424b-9fc2-cf346ce4e4d2",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -1152,
+        288
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "stack-check",
+              "leftValue": "={{ $json.in_stack }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "97556ff9-ab43-4577-a5a9-b49a4c283940",
+              "leftValue": "={{ $json.severity_normalized }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "78cc6f00-bb0d-423b-84f6-80f3f6802aa0",
+              "leftValue": "={{ $json.analysis_summary }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6de98ab5-9a4d-4bbe-8b54-eaa425291661",
+      "name": "Relevant to Tech Stack?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -960,
+        288
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "crit-check",
+              "leftValue": "={{ $json.severity_normalized }}",
+              "rightValue": "=High",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "2a98c0af-aea2-45c4-b708-ef34f5619320",
+              "leftValue": "={{ $json.severity_normalized }}",
+              "rightValue": "Critical",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "643591b2-af23-4972-8887-ec26ba2a789c",
+              "leftValue": "={{ $json.severity_normalized }}",
+              "rightValue": "Medium",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "304711d1-4670-4355-921d-ebdb13bc2543",
+      "name": "High/Critical Severity?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -720,
+        192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {},
+      "id": "3b9376f4-eeb4-4bda-a300-415af4dd49f8",
+      "name": "Ignore (Not in stack)",
+      "type": "n8n-nodes-base.noOp",
+      "position": [
+        -720,
+        448
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "10000",
+          "mode": "list",
+          "cachedResultName": "EUVibers"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10003",
+          "mode": "list",
+          "cachedResultName": "Task"
+        },
+        "summary": "=[URGENT] Security Advisory: {{ $('Code in JavaScript1').item.json.title }}",
+        "additionalFields": {
+          "description": "=Source: {{ $('Code in JavaScript1').item.json.source }}\nSeverity: {{ $json.severity_normalized }}\nLink: {{ $('Code in JavaScript1').item.json.link }}\nPublished: {{ $('Code in JavaScript1').item.json.pubDate }}\n\n*AI Triage Analysis:*\n{{ $json.analysis_summary }}",
+          "priority": {
+            "__rl": true,
+            "value": "1",
+            "mode": "list",
+            "cachedResultName": "Highest"
+          }
+        }
+      },
+      "id": "67def377-5d53-44b5-a24e-f12773b5923c",
+      "name": "Create Urgent Jira",
+      "type": "n8n-nodes-base.jira",
+      "position": [
+        -432,
+        64
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "7aZgC9HQeZsEcofA",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "kennethvillabroza78@gmail.com, martirezjp123@gmail.com, kenjieaerondelena@gmail.com",
+        "subject": "=[URGENT] High/Critical Vulnerability Detected: {{ $('Code in JavaScript1').item.json.title }}",
+        "emailType": "text",
+        "message": "=Team,\n\nA High/Critical vulnerability relevant to our tech stack has been detected.\n\nSource: {{ $('Code in JavaScript1').item.json.source }}\n\nAI Analysis:\n{{ $json.analysis_summary }}\n\nLink: {{ $('Code in JavaScript1').item.json.link }}\n\nAn urgent Jira ticket has been automatically created. Please triage immediately.",
+        "options": {}
+      },
+      "id": "e29c9328-7f69-4763-9846-2745b840dfa5",
+      "name": "Email SecOps & Management",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        -432,
+        224
+      ],
+      "typeVersion": 2,
+      "webhookId": "014c2ffb-7a6f-4623-9520-c0fa3d1028a8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "FGYuLPJBkZR1fDsp",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "10000",
+          "mode": "list",
+          "cachedResultName": "EUVibers"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10003",
+          "mode": "list",
+          "cachedResultName": "Task"
+        },
+        "summary": "=Security Advisory: {{ $('Extract info').item.json.title }}",
+        "additionalFields": {
+          "description": "=Source: {{ $('Extract info').item.json.source }}\nSeverity: {{ $json.severity_normalized }}\nLink: {{ $('Extract info').item.json.link }}\nPublished: {{ $('Extract info').item.json.pubDate }}\n\n*AI Triage Analysis:*\n{{ $json.analysis_summary }}",
+          "priority": {
+            "__rl": true,
+            "value": "4",
+            "mode": "list",
+            "cachedResultName": "Low"
+          }
+        }
+      },
+      "id": "507c7a2b-4af4-4360-8562-cb7bd28dbc43",
+      "name": "Create Backlog Jira",
+      "type": "n8n-nodes-base.jira",
+      "position": [
+        -432,
+        496
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "7aZgC9HQeZsEcofA",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "158SZyLG7ii9h9tGxpvEwOKLW3g_wE7rZHaG4AV6G7YM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Monitor",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/158SZyLG7ii9h9tGxpvEwOKLW3g_wE7rZHaG4AV6G7YM/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $('Code in JavaScript1').item.json.title }}",
+            "description": "={{ $('Code in JavaScript1').item.json.description }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "f146d5e2-6eff-4d54-ba7d-a05475f2b023",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -960,
+        48
+      ],
+      "typeVersion": 4.3,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "NHnMA0KE7XyywmaG",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "Workflow execution failed — check RSS feed, HTTP requests, JSON parsing, or downstream nodes."
+      },
+      "id": "3fd580e0-3339-40b2-a7ed-7716e6d87d74",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.stopAndError",
+      "position": [
+        -2512,
+        672
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "c8858393-e9c1-403b-8419-ddf4f6a77f9c",
+      "name": "Run workflow every 1 hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -4224,
+        352
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -3680,
+        752
+      ],
+      "id": "9c29ac55-d63f-439e-a46c-72395df17f6e",
+      "name": "When chat message received",
+      "webhookId": "8a35c73b-16d1-4708-bec4-30dcc1863e90"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawMessage = $input.first().json.chatInput\n\n// Convert string → JSON\nlet advisories;\n\ntry {\n  advisories = JSON.parse(rawMessage);\n} catch (e) {\n  throw new Error(\"Invalid JSON input in chat message\");\n}\n\nif (!Array.isArray(advisories)) return [];\n\nreturn advisories.map(a => ({\n  json: {\n      title: a.title || `${a.ghsa_id}: ${a.summary}`,\n      link: a.link || a.html_url,\n      pubDate: a.pubDate || a.published_at,\n      severity: a.severity,\n      type: a.type || \"Advisory\",\n      source: a.source || \"Unknown\",\n      description: a.description || \"\"\n    }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3280,
+        704
+      ],
+      "id": "69811af7-4c18-4125-b91b-45ad2566b52f",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -1584,
+        496
+      ],
+      "id": "a61f1f98-8551-4d80-88fe-25010918f92e",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "8aUniNF6ef2N52RV",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const newAdvisories = $('Check if posted in last 24 hours').all(0, 0);\n\nconst storedRecords = $input.all();\n\nconst storedTitles = storedRecords.map(item => item.json.title || item.json.Title).filter(Boolean);\n\nconst uniqueAdvisories = newAdvisories.filter(advisory => {\n  // If the storedTitles array does NOT contain this advisory's title, keep it!\n  return !storedTitles.includes(advisory.json.title);\n});\n\nreturn uniqueAdvisories;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2304,
+        288
+      ],
+      "id": "cdd8eb68-ccd8-4cb9-8d6b-4a6025a960c7",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "9774e029-1488-428d-badf-393bd4b0aeb2",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        -3392,
+        272
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "content": "## For Mock Data\n",
+        "height": 240,
+        "width": 704
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3760,
+        672
+      ],
+      "typeVersion": 1,
+      "id": "bdaea20e-e12d-4782-9c46-5cdd266ca409",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## For Output",
+        "height": 688,
+        "width": 304
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -512,
+        -16
+      ],
+      "typeVersion": 1,
+      "id": "b1e07352-6343-4b37-9a05-54bae334d666",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Trigger",
+        "height": 432
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4288,
+        112
+      ],
+      "typeVersion": 1,
+      "id": "55027a53-f8b6-4d62-9974-34efa9bcff37",
+      "name": "Sticky Note2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Palo Alto security advisories",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CISA KEV HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GitHub Advisory HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Palo Alto security advisories": {
+      "main": [
+        [
+          {
+            "node": "Normalize Palo Alto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CISA KEV HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Normalize CISA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub Advisory HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Normalize GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Palo Alto": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize CISA": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Normalize GitHub": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Extract info": {
+      "main": [
+        [
+          {
+            "node": "Check if posted in last 24 hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if posted in last 24 hours": {
+      "main": [
+        [
+          {
+            "node": "Check Database (Google Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignore stale advisory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Database (Google Sheets)": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tech Stack (Mock)": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Relevant to Tech Stack?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relevant to Tech Stack?": {
+      "main": [
+        [
+          {
+            "node": "High/Critical Severity?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignore (Not in stack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High/Critical Severity?": {
+      "main": [
+        [
+          {
+            "node": "Create Urgent Jira",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email SecOps & Management",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Backlog Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Urgent Jira": {
+      "main": [
+        []
+      ]
+    },
+    "Create Backlog Jira": {
+      "main": [
+        []
+      ]
+    },
+    "Run workflow every 1 hour": {
+      "main": [
+        [
+          {
+            "node": "Get Palo Alto security advisories",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CISA KEV HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GitHub Advisory HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Extract info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Get Tech Stack (Mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Extract info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1785c131-805b-473f-9b5c-68e4d81e85a6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c0b6e9ea7931eb4315af13fedb1aa3caf7dcda9eca8cfc9c7c2777dcfe895c09"
+  },
+  "id": "LpUMIyb3U1xKphyS",
+  "tags": []
+}
